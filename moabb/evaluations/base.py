@@ -14,18 +14,7 @@ from moabb.paradigms.base import BaseParadigm
 
 log = logging.getLogger(__name__)
 
-# Making the optuna soft dependency
-try:
-    from optuna.integration import OptunaSearchCV
-
-    optuna_available = True
-except ImportError:
-    optuna_available = False
-
-if optuna_available:
-    search_methods = {"grid": GridSearchCV, "optuna": OptunaSearchCV}
-else:
-    search_methods = {"grid": GridSearchCV}
+search_methods = {"grid": GridSearchCV}
 
 
 class BaseEvaluation(ABC):
@@ -115,9 +104,8 @@ class BaseEvaluation(ABC):
         self.cache_config = cache_config
         self.optuna = optuna
         self.time_out = time_out
+        self.suffix = suffix
 
-        if self.optuna and not optuna_available:
-            raise ImportError("Optuna is not available. Please install it first.")
         if (self.time_out != 60 * 15) and not self.optuna:
             warn(
                 "time_out parameter is only used when optuna is enabled. "
