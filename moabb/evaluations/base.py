@@ -167,6 +167,7 @@ class BaseEvaluation(ABC):
             hdf5_path=self.hdf5_path,
             additional_columns=additional_columns,
         )
+        
 
     def process(self, pipelines, param_grid=None, postprocess_pipeline=None):
         """Runs all pipelines on all datasets.
@@ -222,6 +223,7 @@ class BaseEvaluation(ABC):
                 process_pipeline=process_pipeline,
                 postprocess_pipeline=postprocess_pipeline,
             )
+        
             for res in results:
                 self.push_result(res, pipelines, process_pipeline)
             res_per_db.append(
@@ -233,6 +235,7 @@ class BaseEvaluation(ABC):
         return pd.concat(res_per_db, ignore_index=True)
 
     def push_result(self, res, pipelines, process_pipeline):
+
         message = "{} | ".format(res["pipeline"])
         message += "{} | {} | {}".format(
             res["dataset"].code, res["subject"], res["session"]

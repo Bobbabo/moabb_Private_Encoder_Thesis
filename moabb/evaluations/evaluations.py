@@ -12,20 +12,223 @@ from sklearn.model_selection import (
     LeaveOneGroupOut,
     StratifiedKFold,
     StratifiedShuffleSplit,
+    train_test_split,
     ShuffleSplit,
     cross_validate,
 )
 from sklearn.model_selection._validation import _fit_and_score, _score
 from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
-
+from braindecode import EEGClassifier
 from moabb.evaluations.base import BaseEvaluation
 from moabb.evaluations.utils import create_save_path, save_model_cv, save_model_list
+import matplotlib.pyplot as plt
 
 log = logging.getLogger(__name__)
 
 # Numpy ArrayLike is only available starting from Numpy 1.20 and Python 3.8
 Vector = Union[list, tuple, np.ndarray]
+
+from sklearn.model_selection import BaseCrossValidator
+
+import torch.nn as nn
+
+
+
+
+class AllRunsEvaluationModified(BaseEvaluation):
+
+    def __init__(self,**kwargs):
+        super().__init__(**kwargs, additional_columns=["cross_fold", "n_test_samples"])
+
+    def evaluate(
+        self, dataset, pipelines, param_grid, process_pipeline, postprocess_pipeline=None, random_state=None, save_model=False
+    ):
+
+        # get the data
+        X, y, metadata = self.paradigm.get_data(
+            dataset=dataset,
+            return_epochs=self.return_epochs,
+            return_raws=self.return_raws,
+            cache_config=self.cache_config,
+            postprocess_pipeline=postprocess_pipeline,
+        )
+        
+        # Add subjects as the final value of samples
+        data = X.get_data()
+        
+        for i in range(data.shape[0]):
+            data[i, :, -1] = metadata['subject'][i]
+        # Assign the modified data back to the EpochsArray
+        X._data = data
+
+
+        # encode labels
+        le = LabelEncoder()
+        y = y if self.mne_labels else le.fit_transform(y)
+
+        # extract metadata
+        subjects = metadata.subject.values
+        sessions = metadata.session.values
+
+        scorer = get_scorer(self.paradigm.scoring)
+
+        n_splits = 1 if self.n_splits is None else self.n_splits
+ 
+        for cv_ind in tqdm(range(n_splits), desc=f"{dataset.code}-AllRuns"):
+            
+            train_indices = []
+            test_indices = []
+            
+
+            # Loop through subjects, make one split each, stratified to balance labels
+            for subject in np.unique(subjects):
+                subject_indices = np.where(subjects == subject)[0]
+                subject_labels = y[subject_indices]
+                sss = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=random_state)
+                for train_idx, test_idx in sss.split(subject_labels, subject_labels):
+                    # Map back to global indices
+                    train_indices.extend(subject_indices[train_idx])
+                    test_indices.extend(subject_indices[test_idx])
+
+            train = np.array(train_indices)
+            test = np.array(test_indices)
+        
+
+
+            for name, clf in pipelines.items():
+                t_start = time()
+                model = deepcopy(clf).fit(X[train], y[train])
+                duration = time() - t_start
+                
+                eeg_classifier = model.steps[-1][1]
+                pytorch_model = eeg_classifier.module_
+                self.visualize_weights(pytorch_model)
+
+                if self.hdf5_path is not None and self.save_model:
+                    model_save_path = create_save_path(
+                        hdf5_path=self.hdf5_path,
+                        code=dataset.code,
+                        subject="mixed",
+                        session="",
+                        name=name+"_"+self.suffix,
+                        grid=False,
+                        eval_type="AllRuns",
+                    )
+                    save_model_cv(
+                        model=model, save_path=model_save_path, cv_index=str(cv_ind)
+                    )
+                    
+                          
+                # eval on each session and subject
+                for subject in np.unique(subjects[test]):
+                    for session in np.unique(sessions[test]):
+                        ix = (subjects[test] == subject) & (sessions[test] == session)
+                        if np.any(ix):  # Check if there are any samples for this subject-session
+                            score = _score(
+                                estimator=model,
+                                X_test=X[test[ix]],
+                                y_test=y[test[ix]],
+                                scorer=scorer,
+                                score_params={},
+                            )
+
+                        nchan = X.info["nchan"] if isinstance(X, BaseEpochs) else X.shape[1]
+                        res = {
+                            "time": duration,
+                            "dataset": dataset,
+                            "subject": subject,
+                            "session": session,
+                            "score": score,
+                            "n_samples": len(train),
+                            "n_test_samples": len(test[ix]),
+                            "n_channels": nchan,
+                            "cross_fold": cv_ind,
+                            "pipeline": name,
+                        }
+
+                        yield res
+                # eval on all sessions and subject 
+                ix = np.ones(len(test), dtype=bool)
+                score = _score(
+                    estimator=model,
+                    X_test=X[test[ix]],
+                    y_test=y[test[ix]],
+                    scorer=scorer,
+                    score_params={},
+                )
+
+                nchan = X.info["nchan"] if isinstance(X, BaseEpochs) else X.shape[1]
+                res = {
+                    "time": duration,
+                    "dataset": dataset,
+                    "subject": "mixed",
+                    "session": "mixed",
+                    "score": score,
+                    "n_samples": len(train),
+                    "n_test_samples": len(test),
+                    "n_channels": nchan,
+                    "cross_fold": cv_ind,
+                    "pipeline": name,
+                
+                }
+
+                yield res
+
+    def is_valid(self, dataset):
+        return len(dataset.subject_list) > 1
+    
+    def visualize_weights(self, model):
+        """
+        Generalized function to visualize weights of convolutional and linear layers in a model.
+
+        Args:
+            model (nn.Module): The neural network model.
+        """
+        for name, module in model.named_modules():
+            if isinstance(module, nn.Conv2d):
+                # Extract weights
+                conv_weights = module.weight.data.cpu().numpy()
+                num_kernels = conv_weights.shape[0]
+                n_chans = conv_weights.shape[1]
+                kernel_height = conv_weights.shape[2]
+                kernel_width = conv_weights.shape[3]
+
+                # Visualize first, middle, and last kernel
+                selected_kernels = [0, num_kernels // 2, num_kernels - 1]
+                for i in selected_kernels:
+                    plt.figure(figsize=(10, 4))
+                    # For multi-channel input, we can visualize each channel separately or average them
+                    kernel = conv_weights[i]
+                    if n_chans > 1:
+                        # Average across input channels
+                        kernel_mean = np.mean(kernel, axis=0)
+                    else:
+                        kernel_mean = kernel[0]
+                    plt.imshow(kernel_mean, aspect='auto', cmap='viridis')
+                    plt.colorbar()
+                    plt.title(f'Conv2D Layer: {name}, Kernel {i+1}')
+                    plt.xlabel('Width')
+                    plt.ylabel('Height')
+                    plt.show()
+
+            elif isinstance(module, nn.Conv1d):
+                # Similar handling for Conv1d
+                pass  # Implement as needed
+
+            elif isinstance(module, nn.Linear):
+                # Extract weights
+                fc_weights = module.weight.data.cpu().numpy()
+
+                # Visualize weights as a histogram
+                plt.figure(figsize=(8, 6))
+                plt.hist(fc_weights.flatten(), bins=50)
+                plt.title(f'Linear Layer: {name} Weights Distribution')
+                plt.xlabel('Weight Value')
+                plt.ylabel('Frequency')
+                plt.show()
+
+
 
 class AllRunsEvaluation(BaseEvaluation):
     """Performance evaluation within session (k-fold cross-validation)

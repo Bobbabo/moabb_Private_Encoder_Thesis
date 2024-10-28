@@ -3,17 +3,17 @@ import mne
 import seaborn as sns
 import torch
 from braindecode import EEGClassifier
-from braindecode.models import EEGNetv4
 from sklearn.pipeline import make_pipeline
 from skorch.callbacks import EarlyStopping, EpochScoring
 from skorch.dataset import ValidSplit
 from moabb.evaluations import AllRunsEvaluation
-from shallow import CollapsedShallowNet
+from shallow import CollapsedShallowNet, CollapsedShallowNetPrivate
 
 from moabb.datasets import BNCI2014_001
 from moabb.evaluations import CrossSessionEvaluation
 from moabb.paradigms import MotorImagery
 from moabb.utils import setup_seed
+    
 
 mne.set_log_level(False)
 
@@ -49,8 +49,9 @@ events = ["right_hand", "left_hand"]
 paradigm = MotorImagery(
     events=events, n_classes=len(events), fmin=fmin, fmax=fmax, tmin=tmin, tmax=tmax
 )
-subjects = [1]
+subjects = [1,2,3,4,5,6,7,8,9]
 X, _, _ = paradigm.get_data(dataset=dataset, subjects=subjects)
+
 
 # Define the CollapsedShallowNet model within the EEGClassifier
 clf = EEGClassifier(
@@ -83,7 +84,7 @@ pipes = {"CollapsedShallowNet": make_pipeline(clf)}
 evaluation = AllRunsEvaluation(
     paradigm=paradigm,
     datasets=dataset,
-    suffix="braindecode_collapsedshallownet_example",
+    suffix="braindecode_collapsedshallownetprivate_example",
     overwrite=True,
     return_epochs=True,
     n_jobs=1,
@@ -94,3 +95,7 @@ results = evaluation.process(pipes)
 
 # Display the results
 print(results.head())
+
+plt.figure()
+sns.barplot(data=results, y="score", x="subject", palette="viridis")
+plt.show()

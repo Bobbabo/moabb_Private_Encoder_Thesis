@@ -8,6 +8,7 @@ from .evaluations import (
     CrossSessionEvaluation,
     CrossSubjectEvaluation,
     WithinSessionEvaluation,
-    AllRunsEvaluation
+    AllRunsEvaluation,
+    AllRunsEvaluationModified
 )
 from .utils import create_save_path, save_model_cv, save_model_list
