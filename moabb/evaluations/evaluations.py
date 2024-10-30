@@ -23,6 +23,8 @@ from braindecode import EEGClassifier
 from moabb.evaluations.base import BaseEvaluation
 from moabb.evaluations.utils import create_save_path, save_model_cv, save_model_list
 import matplotlib.pyplot as plt
+from shallow import CollapsedShallowNetPrivate, CollapsedShallowNet, SubjectAwareModel
+
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +34,7 @@ Vector = Union[list, tuple, np.ndarray]
 from sklearn.model_selection import BaseCrossValidator
 
 import torch.nn as nn
+import torch
 
 
 
@@ -101,9 +104,16 @@ class AllRunsEvaluationModified(BaseEvaluation):
                 model = deepcopy(clf).fit(X[train], y[train])
                 duration = time() - t_start
                 
-                eeg_classifier = model.steps[-1][1]
-                pytorch_model = eeg_classifier.module_
-                self.visualize_weights(pytorch_model)
+                #eeg_classifier = model.steps[-1][1]
+                #pytorch_model = eeg_classifier.module_
+                #self.visualize_weights(pytorch_model)
+                #self.compute_saliency_maps(pytorch_model, X[test], y[test])
+                    # Prepare metadata for test samples if needed
+                #metadata_test = metadata.iloc[test] if (isinstance(pytorch_model, CollapsedShallowNetPrivate) or
+                #  isinstance(pytorch_model, SubjectAwareModel)) else None
+
+                # Compute and visualize saliency maps
+                #self.compute_saliency_maps(pytorch_model, X[test], y[test], metadata_test=metadata_test)
 
                 if self.hdf5_path is not None and self.save_model:
                     model_save_path = create_save_path(
@@ -227,7 +237,98 @@ class AllRunsEvaluationModified(BaseEvaluation):
                 plt.xlabel('Weight Value')
                 plt.ylabel('Frequency')
                 plt.show()
+                
+    def compute_saliency_maps(self, model, X_test, y_test, metadata_test=None):
+        """
+        Compute and visualize saliency maps for a set of test samples.
 
+        Args:
+            model (nn.Module): The trained PyTorch model.
+            X_test (mne.Epochs or ndarray): Test data.
+            y_test (ndarray): True labels for the test data.
+            metadata_test (pd.DataFrame, optional): Metadata containing subject IDs, required for models that need subject IDs.
+        """
+        # Ensure the model is in evaluation mode
+        model.eval()
+
+        # Select a few samples to compute saliency maps
+        num_samples = 5  # Adjust as needed
+        X_test_data = X_test.get_data() if isinstance(X_test, BaseEpochs) else X_test
+        X_samples = X_test_data[:num_samples]
+        y_samples = y_test[:num_samples]
+
+        # Check if model requires subject IDs in input
+        requires_subject_ids = isinstance(model, CollapsedShallowNetPrivate)
+
+        # If subject IDs are required, ensure metadata is provided
+        if requires_subject_ids and metadata_test is None:
+            raise ValueError("Metadata with subject IDs must be provided for models requiring subject IDs.")
+
+        # Convert to torch tensors
+        X_samples_tensor = torch.tensor(X_samples, dtype=torch.float32)
+        y_samples_tensor = torch.tensor(y_samples, dtype=torch.long)
+
+        # If subject IDs are required, encode them into the input data
+        if requires_subject_ids:
+            subject_ids = metadata_test['subject'].values[:num_samples]
+            # Encode subject IDs into the last time point of the first channel
+            for i in range(num_samples):
+                X_samples_tensor[i, 0, -1] = subject_ids[i] * 1e6  # Multiply to avoid precision issues
+        else:
+            # For models that do not require subject IDs, no modification is needed
+            pass
+
+        # Move tensors to the device (CPU or GPU)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        X_samples_tensor = X_samples_tensor.to(device)
+        y_samples_tensor = y_samples_tensor.to(device)
+        model = model.to(device)
+
+        # Enable gradients for input
+        X_samples_tensor.requires_grad = True
+
+        # Forward pass
+        if requires_subject_ids:
+            # For models that extract subject IDs from the input, we can proceed normally
+            outputs = model(X_samples_tensor)
+        else:
+            outputs = model(X_samples_tensor)
+
+        # For each sample, compute saliency map
+        for i in range(num_samples):
+            output = outputs[i]
+            target_class = y_samples_tensor[i]
+
+            # Zero gradients
+            model.zero_grad()
+
+            # Backward pass for the target class
+            output[target_class].backward(retain_graph=True)
+
+            # Extract saliency map (absolute value of the gradients)
+            saliency = X_samples_tensor.grad[i].abs().detach().cpu().numpy()
+
+            # Remove the singleton dimension if present
+            if saliency.shape[0] == 1:
+                saliency = saliency.squeeze(0)
+
+            # Exclude the gradient w.r.t. the subject ID
+            if requires_subject_ids:
+                # The last time point contains the subject ID, we exclude it
+                saliency = saliency[:, :-1]
+
+            # Plot the saliency map
+            plt.figure(figsize=(12, 6))
+            plt.imshow(saliency, aspect='auto', cmap='hot')
+            plt.colorbar(label='Saliency')
+            plt.xlabel('Time')
+            plt.ylabel('Channels')
+            plt.title(f'Saliency Map for Sample {i+1}, True Class: {y_samples[i]}')
+            plt.show()
+
+            # Clear gradients for the next iteration
+            model.zero_grad()
+            X_samples_tensor.grad.data.zero_()
 
 
 class AllRunsEvaluation(BaseEvaluation):
