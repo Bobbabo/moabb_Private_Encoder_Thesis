@@ -19,7 +19,7 @@ from sklearn.model_selection import (
 from sklearn.model_selection._validation import _fit_and_score, _score
 from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
-from braindecode import EEGClassifier
+#from braindecode import EEGClassifier
 from moabb.evaluations.base import BaseEvaluation
 from moabb.evaluations.utils import create_save_path, save_model_cv, save_model_list
 import matplotlib.pyplot as plt

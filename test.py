@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import mne
 import seaborn as sns
 import torch
-from braindecode import EEGClassifier
+from braindecode.classifier import EEGClassifier
 from sklearn.pipeline import make_pipeline
 from skorch.callbacks import EarlyStopping, EpochScoring
 from skorch.dataset import ValidSplit

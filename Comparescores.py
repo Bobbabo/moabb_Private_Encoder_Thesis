@@ -29,7 +29,7 @@ cuda = torch.cuda.is_available()
 device = "cuda" if cuda else "cpu"
 print("GPU is", "AVAILABLE" if cuda else "NOT AVAILABLE")
 
-seed = 42
+seed = 3
 setup_seed(seed)
 
 # Ensure that all operations are deterministic on GPU (if used) for reproducibility
@@ -41,10 +41,10 @@ torch.backends.cudnn.benchmark = False
 # learning rate 1e-4
 
 # batch = 2^7
-LEARNING_RATE = 0.0625 * 0.01  # parameter taken from Braindecode
+LEARNING_RATE = 0.0001  # parameter taken from Braindecode
 WEIGHT_DECAY = 0  # parameter taken from Braindecode
-BATCH_SIZE = 64  # parameter taken from BrainDecode
-EPOCH = 20 #3000
+BATCH_SIZE = 128  # parameter taken from BrainDecode
+EPOCH = 3000 #3000
 PATIENCE = 100
 fmin = 4
 fmax = 100
