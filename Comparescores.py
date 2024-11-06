@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import os
 
-from moabb.datasets import BNCI2014_001
+from moabb.datasets import BNCI2014_001, BNCI2014_004
 from moabb.evaluations import CrossSessionEvaluation
 from moabb.paradigms import MotorImagery
 from moabb.utils import setup_seed
@@ -53,7 +53,7 @@ tmin = 0
 tmax = None
 
 
-dataset = BNCI2014_001()
+dataset = BNCI2014_004()
 paradigm = MotorImagery(
     fmin=fmin, fmax=fmax, tmin=tmin, tmax=tmax
 )
