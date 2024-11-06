@@ -16,7 +16,7 @@ from moabb.paradigms import MotorImagery
 from moabb.utils import setup_seed
 
 from moabb.evaluations import AllRunsEvaluation, AllRunsEvaluationModified
-from shallow import OneHotPrivateNet, CollapsedShallowNet, SubjectDicionaryFCNet, SubjectOneHotNet
+from shallow import CollapsedShallowNet, SubjectDicionaryFCNet, SubjectOneHotNet
 
 
     

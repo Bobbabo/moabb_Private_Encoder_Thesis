@@ -23,7 +23,7 @@ from tqdm import tqdm
 from moabb.evaluations.base import BaseEvaluation
 from moabb.evaluations.utils import create_save_path, save_model_cv, save_model_list
 import matplotlib.pyplot as plt
-from shallow import OneHotPrivateNet, CollapsedShallowNet, SubjectDicionaryFCNet
+from shallow import CollapsedShallowNet, SubjectDicionaryFCNet, SubjectOneHotNet
 
 
 log = logging.getLogger(__name__)
@@ -258,7 +258,7 @@ class AllRunsEvaluationModified(BaseEvaluation):
         y_samples = y_test[:num_samples]
 
         # Check if model requires subject IDs in input
-        requires_subject_ids = isinstance(model, CollapsedShallowNetPrivate)
+        requires_subject_ids = isinstance(model, SubjectDicionaryFCNet) or isinstance(model, SubjectOneHotNet)
 
         # If subject IDs are required, ensure metadata is provided
         if requires_subject_ids and metadata_test is None:
