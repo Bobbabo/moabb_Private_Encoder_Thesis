@@ -23,7 +23,7 @@ from tqdm import tqdm
 from moabb.evaluations.base import BaseEvaluation
 from moabb.evaluations.utils import create_save_path, save_model_cv, save_model_list
 import matplotlib.pyplot as plt
-from shallow import CollapsedShallowNetPrivate, CollapsedShallowNet, SubjectAwareModel
+from shallow import OneHotPrivateNet, CollapsedShallowNet, SubjectDicionaryFCNet
 
 
 log = logging.getLogger(__name__)

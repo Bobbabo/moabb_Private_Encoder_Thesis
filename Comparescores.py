@@ -16,6 +16,7 @@ from moabb.paradigms import MotorImagery
 from moabb.utils import setup_seed
 
 from moabb.evaluations import AllRunsEvaluation, AllRunsEvaluationModified
+from shallow import OneHotPrivateNet, CollapsedShallowNet, SubjectDicionaryFCNet, SubjectOneHotNet
 
 
     
@@ -60,81 +61,44 @@ subjects = [1,2,3,4,5,6,7,8,9]
 X, _, _ = paradigm.get_data(dataset=dataset, subjects=subjects)
 
 
-from shallow import CollapsedShallowNetPrivate, CollapsedShallowNet, SubjectAwareModel
 
-clf = EEGClassifier(
-    module=SubjectAwareModel,  
-    module__n_chans=X.shape[1],  # number of input channels
-    module__n_outputs=len(dataset.event_id),  # number of output classes
-    module__n_times=X.shape[2],  # length of the input signal in time points
-    optimizer=torch.optim.Adam,
-    optimizer__lr=LEARNING_RATE,
-    batch_size=BATCH_SIZE,
-    max_epochs=EPOCH,
-    train_split=ValidSplit(0.2, random_state=seed),
-    device=device,
-    callbacks=[
-        EarlyStopping(monitor="valid_loss", patience=PATIENCE),
-        EpochScoring(
-            scoring="accuracy", on_train=True, name="train_acc", lower_is_better=False
-        ),
-        EpochScoring(
-            scoring="accuracy", on_train=False, name="valid_acc", lower_is_better=False
-        ),
-    ],
-    verbose=1,
-)
+def make_classifier(module):
+    clf = EEGClassifier(
+        module=module,  
+        module__n_chans=X.shape[1],  # number of input channels
+        module__n_outputs=len(dataset.event_id),  # number of output classes
+        module__n_times=X.shape[2],  # length of the input signal in time points
+        optimizer=torch.optim.Adam,
+        optimizer__lr=LEARNING_RATE,
+        batch_size=BATCH_SIZE,
+        max_epochs=EPOCH,
+        train_split=ValidSplit(0.2, random_state=seed),
+        device=device,
+        callbacks=[
+            EarlyStopping(monitor="valid_loss", patience=PATIENCE),
+            EpochScoring(
+                scoring="accuracy", on_train=True, name="train_acc", lower_is_better=False
+            ),
+            EpochScoring(
+                scoring="accuracy", on_train=False, name="valid_acc", lower_is_better=False
+            ),
+        ],
+        verbose=1,
+    )
+    
+    return clf
+    
+clf = make_classifier(SubjectOneHotNet)
 
-clf2 = EEGClassifier(
-    module=CollapsedShallowNetPrivate,  
-    module__n_chans=X.shape[1],  # number of input channels
-    module__n_outputs=len(dataset.event_id),  # number of output classes
-    module__n_times=X.shape[2],  # length of the input signal in time points
-    optimizer=torch.optim.Adam,
-    optimizer__lr=LEARNING_RATE,
-    batch_size=BATCH_SIZE,
-    max_epochs=EPOCH,
-    train_split=ValidSplit(0.2, random_state=seed),
-    device=device,
-    callbacks=[
-        EarlyStopping(monitor="valid_loss", patience=PATIENCE),
-        EpochScoring(
-            scoring="accuracy", on_train=True, name="train_acc", lower_is_better=False
-        ),
-        EpochScoring(
-            scoring="accuracy", on_train=False, name="valid_acc", lower_is_better=False
-        ),
-    ],
-    verbose=1,
-)
+clf2 = make_classifier(SubjectDicionaryFCNet)
 
-clf3 = EEGClassifier(
-    module=CollapsedShallowNet,  
-    module__n_chans=X.shape[1],  # number of input channels
-    module__n_outputs=len(dataset.event_id),  # number of output classes
-    module__n_times=X.shape[2],  # length of the input signal in time points
-    optimizer=torch.optim.Adam,
-    optimizer__lr=LEARNING_RATE,
-    batch_size=BATCH_SIZE,
-    max_epochs=EPOCH,
-    train_split=ValidSplit(0.2, random_state=seed),
-    device=device,
-    callbacks=[
-        EarlyStopping(monitor="valid_loss", patience=PATIENCE),
-        EpochScoring(
-            scoring="accuracy", on_train=True, name="train_acc", lower_is_better=False
-        ),
-        EpochScoring(
-            scoring="accuracy", on_train=False, name="valid_acc", lower_is_better=False
-        ),
-    ],
-    verbose=1,
-)
+clf3 = make_classifier(CollapsedShallowNet)
+
 
 # Create a pipeline with the classifier
 #pipes = {"CollapsedShallowNetPrivate": make_pipeline(clf),}
-pipes = { "CollapsedShallowNet": make_pipeline(clf3), "CollapsedShallowNetPrivate": make_pipeline(clf2), "SubjectAwareModel": make_pipeline(clf),}
-
+pipes = { "CollapsedShallowNet": make_pipeline(clf3), "SubjectDicionaryFCNet": make_pipeline(clf2), "SubjectOneHotNet": make_pipeline(clf),}
+#pipes = {"SubjectOneHotNet": make_pipeline(clf),}
 
 results_list = []
 # Ensure the output directory exists
