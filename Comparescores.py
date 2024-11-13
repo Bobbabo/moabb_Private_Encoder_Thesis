@@ -15,11 +15,9 @@ from moabb.evaluations import CrossSessionEvaluation
 from moabb.paradigms import MotorImagery
 from moabb.utils import setup_seed
 
-from moabb.evaluations import AllRunsEvaluation, AllRunsEvaluationModified
-from shallow import CollapsedShallowNet, SubjectDicionaryFCNet, SubjectOneHotNet
+from moabb.evaluations import AllRunsEvaluationModified, AllRunsEvaluation, AllRunsEvaluationSavesEachEpoch
+from shallow import CollapsedShallowNet, SubjectDicionaryFCNet, SubjectOneHotNet, SubjectOneHotConvNet, SubjectDicionaryConvNet, SubjectOneHotConvNet2, SubjectAdvIndexFCNet
 
-
-    
 mne.set_log_level(False)
 
 # Print Information PyTorch
@@ -45,7 +43,7 @@ torch.backends.cudnn.benchmark = False
 LEARNING_RATE = 0.0001  # parameter taken from Braindecode
 WEIGHT_DECAY = 0  # parameter taken from Braindecode
 BATCH_SIZE = 128  # parameter taken from BrainDecode
-EPOCH = 3000 #3000
+EPOCH = 3000
 PATIENCE = 100
 fmin = 4
 fmax = 100
@@ -53,14 +51,15 @@ tmin = 0
 tmax = None
 
 
-dataset = BNCI2014_004()
+dataset = BNCI2014_001()
 paradigm = MotorImagery(
     fmin=fmin, fmax=fmax, tmin=tmin, tmax=tmax
 )
-subjects = [1,2,3,4,5,6,7,8,9]
-X, _, _ = paradigm.get_data(dataset=dataset, subjects=subjects)
 
+X, _, _ = paradigm.get_data(dataset=dataset)
 
+subjects = dataset.subject_list
+        
 
 def make_classifier(module):
     clf = EEGClassifier(
@@ -87,19 +86,28 @@ def make_classifier(module):
     )
     
     return clf
-    
+
 clf = make_classifier(SubjectOneHotNet)
 
 clf2 = make_classifier(SubjectDicionaryFCNet)
 
 clf3 = make_classifier(CollapsedShallowNet)
 
+clf4 = make_classifier(SubjectOneHotConvNet)
+
+clf5 = make_classifier(SubjectOneHotConvNet2)
+
+clf6 = make_classifier(SubjectDicionaryConvNet)
+
+clf7 = make_classifier(SubjectAdvIndexFCNet)
 
 # Create a pipeline with the classifier
+#pipes = {"CollapsedShallowNet": make_pipeline(clf3), "SubjectOneHotConvNet": make_pipeline(clf4), "SubjectOneHotConvNet2": make_pipeline(clf5), "SubjectDicionaryConvNet": make_pipeline(clf6),}
 #pipes = {"CollapsedShallowNetPrivate": make_pipeline(clf),}
-pipes = { "CollapsedShallowNet": make_pipeline(clf3), "SubjectDicionaryFCNet": make_pipeline(clf2), "SubjectOneHotNet": make_pipeline(clf),}
-#pipes = {"SubjectOneHotNet": make_pipeline(clf),}
-
+#pipes = {"SubjectOneHotConvNet": make_pipeline(clf4), "CollapsedShallowNet": make_pipeline(clf3), "SubjectDicionaryFCNet": make_pipeline(clf2), "SubjectOneHotNet": make_pipeline(clf),}
+#pipes = {"CollapsedShallowNet": make_pipeline(clf3), "SubjectDicionaryConvNet": make_pipeline(clf6),}
+#one with them all
+pipes = {"SubjectOneHotNet": make_pipeline(clf), "SubjectDicionaryFCNet": make_pipeline(clf2), "CollapsedShallowNet": make_pipeline(clf3), "SubjectOneHotConvNet": make_pipeline(clf4), "SubjectOneHotConvNet2": make_pipeline(clf5), "SubjectDicionaryConvNet": make_pipeline(clf6), "SubjectAdvIndexFCNet": make_pipeline(clf7),}
 results_list = []
 # Ensure the output directory exists
 output_dir = "./results"
@@ -109,7 +117,7 @@ os.makedirs(output_dir, exist_ok=True)
 for pipe_name, pipe in pipes.items():
     unique_suffix = f"{pipe_name}_braindecode_example"
     
-    evaluation = AllRunsEvaluationModified(
+    evaluation = AllRunsEvaluationSavesEachEpoch(
         paradigm=paradigm,
         datasets=[dataset],
         suffix=unique_suffix,
@@ -117,7 +125,7 @@ for pipe_name, pipe in pipes.items():
         return_epochs=True,
         random_state=seed,
         n_jobs=1,
-        hdf5_path=f"{output_dir}/{pipe_name}_Model.h5",
+        hdf5_path=f"{output_dir}/{pipe_name}",
         save_model=True
     )
     

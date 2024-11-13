@@ -12,6 +12,153 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class SubjectDicionaryConvNet(nn.Module):
+    def __init__(self, n_chans, n_outputs, n_times=1001, dropout=0.5, num_kernels=40, 
+                 kernel_size=25, pool_size=100, num_subjects=9):
+        super(SubjectDicionaryConvNet, self).__init__()
+        self.num_subjects = num_subjects
+
+        # Create a dictionary of spatio-temporal convolutional layers, one per subject
+        self.spatio_temporal_layers = nn.ModuleDict({
+            f'subject_{i+1}': nn.Conv2d(n_chans, num_kernels, (1, kernel_size))
+            for i in range(num_subjects)
+        })
+
+        self.pool = nn.AvgPool2d((1, pool_size))
+        self.batch_norm = nn.BatchNorm2d(num_kernels)
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.LazyLinear(n_outputs)
+
+    def forward(self, x):
+        # Extract subject IDs from the last time point of the first channel
+        subject_ids = x[:, 0, -1] / 1000000  # Assuming subject IDs are stored scaled in the last time point
+        x = x[:, :, :-1]  # Remove the last time point (which contains the subject ID)
+
+        # Add dimension for Conv2d
+        x = torch.unsqueeze(x, dim=2)  # Shape: (batch_size, n_chans, 1, n_times)
+
+        # Prepare a list to collect outputs
+        conv_outputs = []
+
+        for i in range(x.size(0)):  # Loop over batch size
+            subject_id = int(subject_ids[i].item())
+            # Select the appropriate convolutional layer
+            conv_layer = self.spatio_temporal_layers[f'subject_{subject_id}']
+            # Apply the convolutional layer to the i-th sample
+            xi = x[i].unsqueeze(0)  # Add batch dimension
+            xi = conv_layer(xi)
+            conv_outputs.append(xi)
+
+        # Stack the outputs along the batch dimension
+        x = torch.cat(conv_outputs, dim=0)
+
+        x = F.elu(x)
+        x = self.batch_norm(x)
+        x = self.pool(x)
+        x = x.view(x.size(0), -1)  # Flatten
+        x = self.dropout(x)
+        x = self.fc(x)
+        return x
+
+
+
+class SubjectOneHotConvNet2(nn.Module):
+    def __init__(self, n_chans, n_outputs, n_times=1001, dropout=0.5,
+                 num_kernels=40, kernel_size=25, pool_size=100, num_subjects=9):
+        super(SubjectOneHotConvNet2, self).__init__()
+        self.num_subjects = num_subjects
+        self.n_outputs = n_outputs
+        self.num_kernels = num_kernels
+
+        # Spatio-temporal convolutional layer with output channels partitioned per subject
+        self.spatio_temporal = nn.Conv2d(
+            n_chans, num_kernels * num_subjects, (1, kernel_size))
+
+        self.pool = nn.AvgPool2d((1, pool_size))
+        self.batch_norm = nn.BatchNorm2d(num_kernels)
+        self.dropout = nn.Dropout(dropout)
+
+        # Calculate the size of the output after convolution and pooling
+        conv_output_size = ((n_times - kernel_size + 1) - (pool_size - 1) - 1) // pool_size + 1
+        fc_input_size = num_kernels * conv_output_size
+        self.fc = nn.Linear(fc_input_size, n_outputs)
+
+    def forward(self, x):
+        # Extract subject IDs from the last time point of the first channel
+        subject_ids = x[:, 0, -1] / 1000000  # Adjust as per your data format
+        x = x[:, :, :-1]  # Remove the last time point containing subject IDs
+
+        # One-hot encode the subject IDs
+        subject_one_hot = F.one_hot(subject_ids.long() - 1, num_classes=self.num_subjects).float()
+
+        x = torch.unsqueeze(x, dim=2)  # Add dimension for Conv2d
+        x = self.spatio_temporal(x)  # Shape: (batch_size, num_kernels * num_subjects, 1, conv_output_size)
+
+        # Reshape to separate outputs per subject
+        batch_size, total_kernels, _, conv_output_size = x.size()
+        x = x.view(batch_size, self.num_subjects, self.num_kernels, 1, conv_output_size)
+
+        # Use one-hot encoding to select outputs corresponding to the current subject
+        subject_one_hot = subject_one_hot.view(batch_size, self.num_subjects, 1, 1, 1)
+        x = x * subject_one_hot  # Element-wise multiplication
+        x = x.sum(dim=1)  # Sum over the subject dimension
+
+        x = F.elu(x)
+        x = self.batch_norm(x)
+        x = self.pool(x)
+        x = x.view(batch_size, -1)  # Flatten
+        x = self.dropout(x)
+        x = self.fc(x)
+        return x
+
+class SubjectOneHotConvNet(nn.Module):
+    def __init__(self, n_chans, n_outputs, n_times=1001, dropout=0.5, num_kernels=40, 
+                 kernel_size=25, pool_size=100, num_subjects=9):
+        super(SubjectOneHotConvNet, self).__init__()
+        self.num_subjects = num_subjects
+        self.num_kernels = num_kernels
+        self.spatio_temporal = nn.Conv2d(
+            n_chans, num_kernels * num_subjects, (1, kernel_size))
+        self.pool = nn.AvgPool2d((1, pool_size))
+        self.batch_norm = nn.BatchNorm2d(num_kernels)
+        self.dropout = nn.Dropout(dropout)
+        self.fc = nn.LazyLinear(n_outputs)
+
+    def forward(self, x):
+        # Extract subject IDs from the last time point of the first channel
+        subject_ids = x[:, 0, -1] / 1000000  # Assuming subject IDs are in the last time point of channel 0
+        x = x[:, :, :-1]  # Remove the last time point (which contains the subject ID)
+
+        # One-hot encode the subject IDs
+        subject_one_hot = F.one_hot(subject_ids.long() - 1, num_classes=self.num_subjects).float()
+        subject_one_hot = subject_one_hot.view(x.size(0), self.num_subjects, 1, 1, 1)
+        
+        # Continue with the rest of the network
+        x = torch.unsqueeze(x, dim=2)  # Shape: (batch_size, n_chans, 1, n_times)
+        x = self.spatio_temporal(x)     # Shape: (batch_size, num_kernels * num_subjects, 1, output_time_length)
+
+        # Reshape x to separate the subject dimension
+        x = x.view(x.size(0), self.num_subjects, self.num_kernels, 1, x.size(-1))
+
+        # Multiply x by the subject one-hot encoding to select the correct subject's kernels
+        x = x * subject_one_hot
+
+        # Sum over the subject dimension to get the final output
+        x = x.sum(dim=1)  # Shape: (batch_size, num_kernels, 1, output_time_length)
+
+        x = F.elu(x)
+        x = self.batch_norm(x)
+        x = self.pool(x)
+        x = x.view(x.size(0), -1)
+        x = self.dropout(x)
+        x = self.fc(x)
+        return x
+
+
 class SubjectOneHotNet(nn.Module):
     def __init__(self, n_chans, n_outputs, n_times=1001, dropout=0.5, num_kernels=40, 
                  kernel_size=25, pool_size=100, num_subjects=9):
@@ -54,6 +201,48 @@ class SubjectOneHotNet(nn.Module):
 
         return out
 
+class SubjectAdvIndexFCNet(nn.Module):
+    def __init__(self, n_chans, n_outputs, n_times=1001, dropout=0.5, num_kernels=40, 
+                 kernel_size=25, pool_size=100, num_subjects=9):
+        super(SubjectAdvIndexFCNet, self).__init__()
+        self.n_outputs = n_outputs
+        self.num_subjects = num_subjects
+        self.spatio_temporal = nn.Conv2d(n_chans, num_kernels, (1, kernel_size))
+        self.pool = nn.AvgPool2d((1, pool_size))
+        self.batch_norm = nn.BatchNorm2d(num_kernels)
+        self.dropout = nn.Dropout(dropout)
+        
+        # Shared fully connected layer with expanded output
+        fc_input_features = num_kernels * ((n_times - kernel_size + 1) // pool_size)
+        fc_output_features = n_outputs * num_subjects
+        self.fc_shared = nn.Linear(fc_input_features, fc_output_features)
+
+    def forward(self, x):
+        # Extract subject IDs from the last time point of the first channel
+        subject_ids = x[:, 0, -1] / 1000000  # Assuming subject IDs are in the last time point of channel 0
+        x = x[:, :, :-1]  # Remove the last time point (which contains the subject ID)
+        subject_ids = (subject_ids.long() - 1)  # Convert to zero-based index
+        
+        # Continue with the rest of the network
+        x = torch.unsqueeze(x, dim=2)  # Add dimension for Conv2d
+        x = self.spatio_temporal(x)
+        x = F.elu(x)
+        x = self.batch_norm(x)
+        x = self.pool(x)
+        x = x.view(x.size(0), -1)  # Flatten
+        x = self.dropout(x)
+        
+        # Apply the shared fully connected layer
+        fc_output = self.fc_shared(x)  # Output shape: (batch_size, n_outputs * num_subjects)
+        fc_output = fc_output.view(-1, self.num_subjects, self.n_outputs)
+        
+        
+        # Use advanced indexing to select the correct subject's output
+        batch_indices = torch.arange(fc_output.size(0), device=x.device)
+        out = fc_output[batch_indices, subject_ids, :]  # Shape: (batch_size, n_outputs)
+        
+        return out
+
 
 
 class SubjectDicionaryFCNet(nn.Module):
@@ -68,7 +257,6 @@ class SubjectDicionaryFCNet(nn.Module):
         self.dropout = nn.Dropout(dropout)
         
         # Create a separate fully connected layer for each subject
-        #self.fc_layers = nn.ModuleList([nn.LazyLinear(n_outputs) for _ in range(num_subjects)])
         self.fc_layers = nn.ModuleDict({
             f'subject_{i+1}': nn.Linear(num_kernels * ((n_times - kernel_size + 1) // pool_size), n_outputs)
             for i in range(num_subjects)           
@@ -98,8 +286,7 @@ class SubjectDicionaryFCNet(nn.Module):
             out[i] = fc_layer(x[i])  # Apply FC layer to the i-th sample
 
         return out
-    
-    
+        
 
 
 class CollapsedShallowNet(nn.Module):
@@ -115,7 +302,6 @@ class CollapsedShallowNet(nn.Module):
         kernel_size (int, optional): Size of the kernel in the spatiotemporal convolution. Defaults to 25.
         pool_size (int, optional): Size of the pooling window in the spatiotemporal convolution. Default is 100.
     """
-
     def __init__(self, n_chans, n_outputs, n_times=1001, dropout=0.5, num_kernels=40, kernel_size=25, pool_size=100):
         super(CollapsedShallowNet, self).__init__()
         self.spatio_temporal = nn.Conv2d(

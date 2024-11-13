@@ -2,7 +2,6 @@ import logging
 from copy import deepcopy
 from time import time
 from typing import Optional, Union
-
 import numpy as np
 from mne.epochs import BaseEpochs
 from sklearn.base import clone
@@ -23,9 +22,7 @@ from tqdm import tqdm
 from moabb.evaluations.base import BaseEvaluation
 from moabb.evaluations.utils import create_save_path, save_model_cv, save_model_list
 import matplotlib.pyplot as plt
-from shallow import CollapsedShallowNet, SubjectDicionaryFCNet, SubjectOneHotNet
-
-
+import os
 log = logging.getLogger(__name__)
 
 # Numpy ArrayLike is only available starting from Numpy 1.20 and Python 3.8
@@ -37,9 +34,7 @@ import torch.nn as nn
 import torch
 
 
-
-
-class AllRunsEvaluationModified(BaseEvaluation):
+class AllRunsEvaluationSavesEachEpoch(BaseEvaluation):
 
     def __init__(self,**kwargs):
         super().__init__(**kwargs, additional_columns=["cross_fold", "n_test_samples"])
@@ -62,6 +57,7 @@ class AllRunsEvaluationModified(BaseEvaluation):
         
         for i in range(data.shape[0]):
             data[i, :, -1] = metadata['subject'][i]
+
         # Assign the modified data back to the EpochsArray
         X._data = data
 
@@ -96,24 +92,158 @@ class AllRunsEvaluationModified(BaseEvaluation):
 
             train = np.array(train_indices)
             test = np.array(test_indices)
-        
 
+            for name, pipeline in pipelines.items():    
+                t_start = time()          
+                model = deepcopy(pipeline)
+                # Directory to save weights at each epoch for this model and fold
+                weight_save_dir = os.path.join(self.hdf5_path, "weights", name, f"fold_{cv_ind}")
+                os.makedirs(weight_save_dir, exist_ok=True)
+                #model.module_
+                clf = model.named_steps["eegclassifier"]
+                epochs = clf.max_epochs
+                clf.max_epochs = 1
+                # Start training with saving weights at each epoch
+                for epoch in range(epochs):
+                    # Fit model for one epoch (or step)
+                    clf.partial_fit(X[train], y[train]) # Assuming incremental fitting
+                    # Save the weights after this epoch
+                    weight_path = os.path.join(weight_save_dir, f"weights_epoch_{epoch}.pt")
+                    torch.save(clf.module_.state_dict(), weight_path)
+                
+                duration = time() - t_start  
+                
+                # Evaluate and yield results as per original code logic
+                
+                # Optional final weight save after full training
+                if save_model:
+                    final_weight_path = os.path.join(weight_save_dir, "final_weights.pt")
+                    torch.save(clf.module_.state_dict(), final_weight_path)
+                    
+                model.named_steps[name] = clf
+                
+                # eval on each session and subject
+                for subject in np.unique(subjects[test]):
+                    for session in np.unique(sessions[test]):
+                        ix = (subjects[test] == subject) & (sessions[test] == session)
+                        if np.any(ix):  # Check if there are any samples for this subject-session
+                            score = _score(
+                                estimator=model,
+                                X_test=X[test[ix]],
+                                y_test=y[test[ix]],
+                                scorer=scorer,
+                                score_params={},
+                            )
+
+                        nchan = X.info["nchan"] if isinstance(X, BaseEpochs) else X.shape[1]
+                        res = {
+                            "time": duration,
+                            "dataset": dataset,
+                            "subject": subject,
+                            "session": session,
+                            "score": score,
+                            "n_samples": len(train),
+                            "n_test_samples": len(test[ix]),
+                            "n_channels": nchan,
+                            "cross_fold": cv_ind,
+                            "pipeline": name,
+                        }
+
+                        yield res
+                # eval on all sessions and subject 
+                ix = np.ones(len(test), dtype=bool)
+                score = _score(
+                    estimator=model,
+                    X_test=X[test[ix]],
+                    y_test=y[test[ix]],
+                    scorer=scorer,
+                    score_params={},
+                )
+
+                nchan = X.info["nchan"] if isinstance(X, BaseEpochs) else X.shape[1]
+                res = {
+                    "time": duration,
+                    "dataset": dataset,
+                    "subject": "mixed",
+                    "session": "mixed",
+                    "score": score,
+                    "n_samples": len(train),
+                    "n_test_samples": len(test),
+                    "n_channels": nchan,
+                    "cross_fold": cv_ind,
+                    "pipeline": name,
+                
+                }
+
+                yield res
+
+    def is_valid(self, dataset):
+        return len(dataset.subject_list) > 1
+    
+
+class AllRunsEvaluationModified(BaseEvaluation):
+
+    def __init__(self,**kwargs):
+        super().__init__(**kwargs, additional_columns=["cross_fold", "n_test_samples"])
+
+    def evaluate(
+        self, dataset, pipelines, param_grid, process_pipeline, postprocess_pipeline=None, random_state=None, save_model=False
+    ):
+
+        # get the data
+        X, y, metadata = self.paradigm.get_data(
+            dataset=dataset,
+            return_epochs=self.return_epochs,
+            return_raws=self.return_raws,
+            cache_config=self.cache_config,
+            postprocess_pipeline=postprocess_pipeline,
+        )
+        
+        # Add subjects as the final value of samples
+        data = X.get_data()
+        
+        for i in range(data.shape[0]):
+            data[i, :, -1] = metadata['subject'][i]
+
+        # Assign the modified data back to the EpochsArray
+        X._data = data
+
+
+        # encode labels
+        le = LabelEncoder()
+        y = y if self.mne_labels else le.fit_transform(y)
+
+        # extract metadata
+        subjects = metadata.subject.values
+        sessions = metadata.session.values
+
+        scorer = get_scorer(self.paradigm.scoring)
+
+        n_splits = 1 if self.n_splits is None else self.n_splits
+ 
+        for cv_ind in tqdm(range(n_splits), desc=f"{dataset.code}-AllRuns"):
+            
+            train_indices = []
+            test_indices = []
+            
+
+            # Loop through subjects, make one split each, stratified to balance labels
+            for subject in np.unique(subjects):
+                subject_indices = np.where(subjects == subject)[0]
+                subject_labels = y[subject_indices]
+                sss = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=random_state)
+                for train_idx, test_idx in sss.split(subject_labels, subject_labels):
+                    # Map back to global indices
+                    train_indices.extend(subject_indices[train_idx])
+                    test_indices.extend(subject_indices[test_idx])
+
+            train = np.array(train_indices)
+            test = np.array(test_indices)
 
             for name, clf in pipelines.items():
                 t_start = time()
                 model = deepcopy(clf).fit(X[train], y[train])
                 duration = time() - t_start
-                
-                #eeg_classifier = model.steps[-1][1]
-                #pytorch_model = eeg_classifier.module_
-                #self.visualize_weights(pytorch_model)
-                #self.compute_saliency_maps(pytorch_model, X[test], y[test])
-                    # Prepare metadata for test samples if needed
-                #metadata_test = metadata.iloc[test] if (isinstance(pytorch_model, CollapsedShallowNetPrivate) or
-                #  isinstance(pytorch_model, SubjectAwareModel)) else None
-
-                # Compute and visualize saliency maps
-                #self.compute_saliency_maps(pytorch_model, X[test], y[test], metadata_test=metadata_test)
 
                 if self.hdf5_path is not None and self.save_model:
                     model_save_path = create_save_path(
@@ -188,147 +318,6 @@ class AllRunsEvaluationModified(BaseEvaluation):
     def is_valid(self, dataset):
         return len(dataset.subject_list) > 1
     
-    def visualize_weights(self, model):
-        """
-        Generalized function to visualize weights of convolutional and linear layers in a model.
-
-        Args:
-            model (nn.Module): The neural network model.
-        """
-        for name, module in model.named_modules():
-            if isinstance(module, nn.Conv2d):
-                # Extract weights
-                conv_weights = module.weight.data.cpu().numpy()
-                num_kernels = conv_weights.shape[0]
-                n_chans = conv_weights.shape[1]
-                kernel_height = conv_weights.shape[2]
-                kernel_width = conv_weights.shape[3]
-
-                # Visualize first, middle, and last kernel
-                selected_kernels = [0, num_kernels // 2, num_kernels - 1]
-                for i in selected_kernels:
-                    plt.figure(figsize=(10, 4))
-                    # For multi-channel input, we can visualize each channel separately or average them
-                    kernel = conv_weights[i]
-                    if n_chans > 1:
-                        # Average across input channels
-                        kernel_mean = np.mean(kernel, axis=0)
-                    else:
-                        kernel_mean = kernel[0]
-                    plt.imshow(kernel_mean, aspect='auto', cmap='viridis')
-                    plt.colorbar()
-                    plt.title(f'Conv2D Layer: {name}, Kernel {i+1}')
-                    plt.xlabel('Width')
-                    plt.ylabel('Height')
-                    plt.show()
-
-            elif isinstance(module, nn.Conv1d):
-                # Similar handling for Conv1d
-                pass  # Implement as needed
-
-            elif isinstance(module, nn.Linear):
-                # Extract weights
-                fc_weights = module.weight.data.cpu().numpy()
-
-                # Visualize weights as a histogram
-                plt.figure(figsize=(8, 6))
-                plt.hist(fc_weights.flatten(), bins=50)
-                plt.title(f'Linear Layer: {name} Weights Distribution')
-                plt.xlabel('Weight Value')
-                plt.ylabel('Frequency')
-                plt.show()
-                
-    def compute_saliency_maps(self, model, X_test, y_test, metadata_test=None):
-        """
-        Compute and visualize saliency maps for a set of test samples.
-
-        Args:
-            model (nn.Module): The trained PyTorch model.
-            X_test (mne.Epochs or ndarray): Test data.
-            y_test (ndarray): True labels for the test data.
-            metadata_test (pd.DataFrame, optional): Metadata containing subject IDs, required for models that need subject IDs.
-        """
-        # Ensure the model is in evaluation mode
-        model.eval()
-
-        # Select a few samples to compute saliency maps
-        num_samples = 5  # Adjust as needed
-        X_test_data = X_test.get_data() if isinstance(X_test, BaseEpochs) else X_test
-        X_samples = X_test_data[:num_samples]
-        y_samples = y_test[:num_samples]
-
-        # Check if model requires subject IDs in input
-        requires_subject_ids = isinstance(model, SubjectDicionaryFCNet) or isinstance(model, SubjectOneHotNet)
-
-        # If subject IDs are required, ensure metadata is provided
-        if requires_subject_ids and metadata_test is None:
-            raise ValueError("Metadata with subject IDs must be provided for models requiring subject IDs.")
-
-        # Convert to torch tensors
-        X_samples_tensor = torch.tensor(X_samples, dtype=torch.float32)
-        y_samples_tensor = torch.tensor(y_samples, dtype=torch.long)
-
-        # If subject IDs are required, encode them into the input data
-        if requires_subject_ids:
-            subject_ids = metadata_test['subject'].values[:num_samples]
-            # Encode subject IDs into the last time point of the first channel
-            for i in range(num_samples):
-                X_samples_tensor[i, 0, -1] = subject_ids[i] * 1e6  # Multiply to avoid precision issues
-        else:
-            # For models that do not require subject IDs, no modification is needed
-            pass
-
-        # Move tensors to the device (CPU or GPU)
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        X_samples_tensor = X_samples_tensor.to(device)
-        y_samples_tensor = y_samples_tensor.to(device)
-        model = model.to(device)
-
-        # Enable gradients for input
-        X_samples_tensor.requires_grad = True
-
-        # Forward pass
-        if requires_subject_ids:
-            # For models that extract subject IDs from the input, we can proceed normally
-            outputs = model(X_samples_tensor)
-        else:
-            outputs = model(X_samples_tensor)
-
-        # For each sample, compute saliency map
-        for i in range(num_samples):
-            output = outputs[i]
-            target_class = y_samples_tensor[i]
-
-            # Zero gradients
-            model.zero_grad()
-
-            # Backward pass for the target class
-            output[target_class].backward(retain_graph=True)
-
-            # Extract saliency map (absolute value of the gradients)
-            saliency = X_samples_tensor.grad[i].abs().detach().cpu().numpy()
-
-            # Remove the singleton dimension if present
-            if saliency.shape[0] == 1:
-                saliency = saliency.squeeze(0)
-
-            # Exclude the gradient w.r.t. the subject ID
-            if requires_subject_ids:
-                # The last time point contains the subject ID, we exclude it
-                saliency = saliency[:, :-1]
-
-            # Plot the saliency map
-            plt.figure(figsize=(12, 6))
-            plt.imshow(saliency, aspect='auto', cmap='hot')
-            plt.colorbar(label='Saliency')
-            plt.xlabel('Time')
-            plt.ylabel('Channels')
-            plt.title(f'Saliency Map for Sample {i+1}, True Class: {y_samples[i]}')
-            plt.show()
-
-            # Clear gradients for the next iteration
-            model.zero_grad()
-            X_samples_tensor.grad.data.zero_()
 
 
 class AllRunsEvaluation(BaseEvaluation):
