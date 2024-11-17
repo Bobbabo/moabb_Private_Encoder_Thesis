@@ -117,7 +117,7 @@ os.makedirs(output_dir, exist_ok=True)
 for pipe_name, pipe in pipes.items():
     unique_suffix = f"{pipe_name}_braindecode_example"
     
-    evaluation = AllRunsEvaluationSavesEachEpoch(
+    evaluation = AllRunsEvaluationModified(
         paradigm=paradigm,
         datasets=[dataset],
         suffix=unique_suffix,
