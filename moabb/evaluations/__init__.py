@@ -10,6 +10,6 @@ from .evaluations import (
     WithinSessionEvaluation,
     AllRunsEvaluation,
     AllRunsEvaluationModified,
-    AllRunsEvaluationSavesEachEpoch
+    AllRunsEvaluationSubjectSpecific,
 )
 from .utils import create_save_path, save_model_cv, save_model_list

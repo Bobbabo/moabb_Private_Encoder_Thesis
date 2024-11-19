@@ -3,6 +3,7 @@ from copy import deepcopy
 from time import time
 from typing import Optional, Union
 import numpy as np
+import mne
 from mne.epochs import BaseEpochs
 from sklearn.base import clone
 from sklearn.metrics import get_scorer
@@ -34,16 +35,14 @@ import torch.nn as nn
 import torch
 
 
-class AllRunsEvaluationSavesEachEpoch(BaseEvaluation):
-
-    def __init__(self,**kwargs):
+class AllRunsEvaluationSubjectSpecific(BaseEvaluation):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs, additional_columns=["cross_fold", "n_test_samples"])
 
     def evaluate(
         self, dataset, pipelines, param_grid, process_pipeline, postprocess_pipeline=None, random_state=None, save_model=False
     ):
-
-        # get the data
+        # Get the data
         X, y, metadata = self.paradigm.get_data(
             dataset=dataset,
             return_epochs=self.return_epochs,
@@ -51,39 +50,33 @@ class AllRunsEvaluationSavesEachEpoch(BaseEvaluation):
             cache_config=self.cache_config,
             postprocess_pipeline=postprocess_pipeline,
         )
-        
-        # Add subjects as the final value of samples
-        data = X.get_data()
-        
-        for i in range(data.shape[0]):
-            data[i, :, -1] = metadata['subject'][i]
 
-        # Assign the modified data back to the EpochsArray
-        X._data = data
+        # Add subject IDs as additional input (optional)
+        # if isinstance(X, mne.BaseEpochs):
+        #     data = X.get_data()
+        #     for i in range(data.shape[0]):
+        #         data[i, :, -1] = metadata["subject"][i]
+        #     X._data = data
 
-
-        # encode labels
+        # Encode labels
         le = LabelEncoder()
         y = y if self.mne_labels else le.fit_transform(y)
 
-        # extract metadata
+        # Extract metadata
         subjects = metadata.subject.values
         sessions = metadata.session.values
-
         scorer = get_scorer(self.paradigm.scoring)
 
         n_splits = 1 if self.n_splits is None else self.n_splits
- 
-        for cv_ind in tqdm(range(n_splits), desc=f"{dataset.code}-AllRuns"):
-            
-            train_indices = []
-            test_indices = []
-            
 
-            # Loop through subjects, make one split each, stratified to balance labels
+        for cv_ind in tqdm(range(n_splits), desc=f"{dataset.code}-AllRuns"):
+            train_indices, test_indices = [], []
+
+            # Create subject-specific train/test splits
             for subject in np.unique(subjects):
                 subject_indices = np.where(subjects == subject)[0]
-                subject_labels = y[subject_indices]
+                subject_labels = y[subject_indices]  # Get labels for stratification
+
                 sss = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=random_state)
                 for train_idx, test_idx in sss.split(subject_labels, subject_labels):
                     # Map back to global indices
@@ -93,40 +86,41 @@ class AllRunsEvaluationSavesEachEpoch(BaseEvaluation):
             train = np.array(train_indices)
             test = np.array(test_indices)
 
-            for name, pipeline in pipelines.items():    
-                t_start = time()          
-                model = deepcopy(pipeline)
-                # Directory to save weights at each epoch for this model and fold
-                weight_save_dir = os.path.join(self.hdf5_path, "weights", name, f"fold_{cv_ind}")
-                os.makedirs(weight_save_dir, exist_ok=True)
-                #model.module_
-                clf = model.named_steps["eegclassifier"]
-                epochs = clf.max_epochs
-                clf.max_epochs = 1
-                # Start training with saving weights at each epoch
-                for epoch in range(epochs):
-                    # Fit model for one epoch (or step)
-                    clf.partial_fit(X[train], y[train]) # Assuming incremental fitting
-                    # Save the weights after this epoch
-                    weight_path = os.path.join(weight_save_dir, f"weights_epoch_{epoch}.pt")
-                    torch.save(clf.module_.state_dict(), weight_path)
-                
-                duration = time() - t_start  
-                
-                # Evaluate and yield results as per original code logic
-                
-                # Optional final weight save after full training
-                if save_model:
-                    final_weight_path = os.path.join(weight_save_dir, "final_weights.pt")
-                    torch.save(clf.module_.state_dict(), final_weight_path)
+            # Validate train and test indices
+            assert max(train) < len(X), "Train indices out of bounds!"
+            assert max(test) < len(X), "Test indices out of bounds!"
+
+            for name, clf in pipelines.items():
+                t_start = time()
+
+                # Handle subject-specific batching
+                if clf.steps[0][1].per_subject_batches:
+                    model = deepcopy(clf).fit(X[train], y[train], classifier__subjects=subjects[train])
+
+                else:
+                    model = deepcopy(clf).fit(X[train], y[train])
                     
-                model.named_steps[name] = clf
-                
-                # eval on each session and subject
+                duration = time() - t_start
+
+                if self.hdf5_path is not None and self.save_model:
+                    model_save_path = create_save_path(
+                        hdf5_path=self.hdf5_path,
+                        code=dataset.code,
+                        subject="mixed",
+                        session="",
+                        name=name + "_" + self.suffix,
+                        grid=False,
+                        eval_type="AllRuns",
+                    )
+                    save_model_cv(
+                        model=model, save_path=model_save_path, cv_index=str(cv_ind)
+                    )
+
+                # Evaluate per session and subject
                 for subject in np.unique(subjects[test]):
                     for session in np.unique(sessions[test]):
                         ix = (subjects[test] == subject) & (sessions[test] == session)
-                        if np.any(ix):  # Check if there are any samples for this subject-session
+                        if np.any(ix):  # Ensure there are samples
                             score = _score(
                                 estimator=model,
                                 X_test=X[test[ix]],
@@ -135,22 +129,23 @@ class AllRunsEvaluationSavesEachEpoch(BaseEvaluation):
                                 score_params={},
                             )
 
-                        nchan = X.info["nchan"] if isinstance(X, BaseEpochs) else X.shape[1]
-                        res = {
-                            "time": duration,
-                            "dataset": dataset,
-                            "subject": subject,
-                            "session": session,
-                            "score": score,
-                            "n_samples": len(train),
-                            "n_test_samples": len(test[ix]),
-                            "n_channels": nchan,
-                            "cross_fold": cv_ind,
-                            "pipeline": name,
-                        }
+                            nchan = X.info["nchan"] if isinstance(X, mne.BaseEpochs) else X.shape[1]
+                            res = {
+                                "time": duration,
+                                "dataset": dataset,
+                                "subject": subject,
+                                "session": session,
+                                "score": score,
+                                "n_samples": len(train),
+                                "n_test_samples": len(test[ix]),
+                                "n_channels": nchan,
+                                "cross_fold": cv_ind,
+                                "pipeline": name,
+                            }
 
-                        yield res
-                # eval on all sessions and subject 
+                            yield res
+
+                # Evaluate on all test samples
                 ix = np.ones(len(test), dtype=bool)
                 score = _score(
                     estimator=model,
@@ -160,7 +155,7 @@ class AllRunsEvaluationSavesEachEpoch(BaseEvaluation):
                     score_params={},
                 )
 
-                nchan = X.info["nchan"] if isinstance(X, BaseEpochs) else X.shape[1]
+                nchan = X.info["nchan"] if isinstance(X, mne.BaseEpochs) else X.shape[1]
                 res = {
                     "time": duration,
                     "dataset": dataset,
@@ -172,14 +167,13 @@ class AllRunsEvaluationSavesEachEpoch(BaseEvaluation):
                     "n_channels": nchan,
                     "cross_fold": cv_ind,
                     "pipeline": name,
-                
                 }
 
                 yield res
 
     def is_valid(self, dataset):
         return len(dataset.subject_list) > 1
-    
+
 
 class AllRunsEvaluationModified(BaseEvaluation):
 
@@ -207,7 +201,6 @@ class AllRunsEvaluationModified(BaseEvaluation):
 
         # Assign the modified data back to the EpochsArray
         X._data = data
-
 
         # encode labels
         le = LabelEncoder()
