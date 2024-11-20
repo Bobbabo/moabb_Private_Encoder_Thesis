@@ -15,8 +15,9 @@ from moabb.evaluations import CrossSessionEvaluation
 from moabb.paradigms import MotorImagery
 from moabb.utils import setup_seed
 
-from moabb.evaluations import AllRunsEvaluationModified, AllRunsEvaluation, AllRunsEvaluationSavesEachEpoch
-from shallow import CollapsedShallowNet, SubjectDicionaryFCNet, SubjectOneHotNet, SubjectOneHotConvNet, SubjectDicionaryConvNet, SubjectOneHotConvNet2, SubjectAdvIndexFCNet
+from moabb.evaluations import AllRunsEvaluationModified
+from shallow import CollapsedShallowNet, SubjectOneHotNet, SubjectOneHotConvNet, SubjectDicionaryConvNet, SubjectOneHotConvNet2, SubjectAdvIndexFCNet,ShallowFBCSPNet
+from shallowDict import ShallowPrivateTemporalDictNetSlow, ShallowPrivateSpatialDictNetSlow, ShallowPrivateCollapsedDictNetSlow, SubjectDicionaryFCNet
 
 mne.set_log_level(False)
 
@@ -101,16 +102,26 @@ clf6 = make_classifier(SubjectDicionaryConvNet)
 
 clf7 = make_classifier(SubjectAdvIndexFCNet)
 
+clf8 = make_classifier(ShallowPrivateTemporalDictNetSlow)
+
+clf9 = make_classifier(ShallowFBCSPNet)
+
+clf10 = make_classifier(ShallowPrivateSpatialDictNetSlow)
+
+clf11 = make_classifier(ShallowPrivateCollapsedDictNetSlow)
+
 # Create a pipeline with the classifier
+
+#pipes = {"ShallowPrivateCollapsedDictNetSlow": make_pipeline(clf11)}
 #pipes = {"CollapsedShallowNet": make_pipeline(clf3), "SubjectOneHotConvNet": make_pipeline(clf4), "SubjectOneHotConvNet2": make_pipeline(clf5), "SubjectDicionaryConvNet": make_pipeline(clf6),}
-#pipes = {"CollapsedShallowNetPrivate": make_pipeline(clf),}
+pipes = {"CollapsedShallowNet": make_pipeline(clf3), "ShallowPrivateCollapsedDictNetSlow": make_pipeline(clf11), "ShallowFBCSPNet": make_pipeline(clf9),"ShallowPrivateTemporalDictNetSlow": make_pipeline(clf8),"ShallowPrivateSpatialDictNetSlow": make_pipeline(clf10)}
 #pipes = {"SubjectOneHotConvNet": make_pipeline(clf4), "CollapsedShallowNet": make_pipeline(clf3), "SubjectDicionaryFCNet": make_pipeline(clf2), "SubjectOneHotNet": make_pipeline(clf),}
 #pipes = {"CollapsedShallowNet": make_pipeline(clf3), "SubjectDicionaryConvNet": make_pipeline(clf6),}
 #one with them all
-pipes = {"SubjectOneHotNet": make_pipeline(clf), "SubjectDicionaryFCNet": make_pipeline(clf2), "CollapsedShallowNet": make_pipeline(clf3), "SubjectOneHotConvNet": make_pipeline(clf4), "SubjectOneHotConvNet2": make_pipeline(clf5), "SubjectDicionaryConvNet": make_pipeline(clf6), "SubjectAdvIndexFCNet": make_pipeline(clf7),}
+#pipes = {"SubjectOneHotNet": make_pipeline(clf), "SubjectDicionaryFCNet": make_pipeline(clf2), "CollapsedShallowNet": make_pipeline(clf3), "SubjectOneHotConvNet": make_pipeline(clf4), "SubjectOneHotConvNet2": make_pipeline(clf5), "SubjectDicionaryConvNet": make_pipeline(clf6), "SubjectAdvIndexFCNet": make_pipeline(clf7),}
 results_list = []
 # Ensure the output directory exists
-output_dir = "./results"
+output_dir = f"./results_{seed}_{dataset.code}"
 os.makedirs(output_dir, exist_ok=True)
 
 # Modify plot and data saving within the loop

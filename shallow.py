@@ -17,41 +17,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class ShallowPrivateTemporalDictNetSlow(nn.Module):
-    def __init__(self, n_chans, n_outputs, n_times=1001, dropout=0.5, num_kernels=40, kernel_size=25, pool_size=100, num_subjects=9):
-        super(ShallowPrivateTemporalDictNetSlow, self).__init__()
-        self.num_subjects = num_subjects
-        
-        self.temporal_layers = nn.ModuleDict({
-            f'subject_{i+1}': nn.Conv2d(1, num_kernels, (1, kernel_size))
-            for i in range(num_subjects)
-        })
-        
-        self.spatial = nn.Conv2d(num_kernels, num_kernels, (n_chans, 1))
-        self.pool = nn.AvgPool2d((1, pool_size))
-        self.batch_norm = nn.BatchNorm2d(num_kernels)
-        self.dropout = nn.Dropout(dropout)
-        self.fc = nn.LazyLinear(n_outputs)
-
-    def forward(self, x, subject_ids):
-        x = torch.unsqueeze(x, dim=1)
-        outputs = []
-        for i in range(x.size(0)):
-            subject_id = subject_ids[i].long().item()
-            x_i = x[i:i+1]
-            x_i = self.temporal_layers[f'subject_{subject_id}'](x_i)
-            outputs.append(x_i)
-        x = torch.cat(outputs, dim=0)
-        x = self.spatial(x)
-        x = F.elu(x)
-        x = self.batch_norm(x)
-        x = self.pool(x)
-        x = x.view(x.size(0), -1)
-        x = self.dropout(x)
-        x = self.fc(x)
-        return x
-
-
 class ShallowPrivateTemporalDictNet(nn.Module):
 
     def __init__(self, n_chans, n_outputs, n_times=1001, dropout=0.5, num_kernels=40, kernel_size=25, pool_size=100, num_subjects=9):
