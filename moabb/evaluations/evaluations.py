@@ -34,15 +34,15 @@ from sklearn.model_selection import BaseCrossValidator
 import torch.nn as nn
 import torch
 
-
-class AllRunsEvaluationSubjectSpecific(BaseEvaluation):
-    def __init__(self, **kwargs):
+class AllRunsEvaluationSubjectParam(BaseEvaluation):
+    def __init__(self,**kwargs):
         super().__init__(**kwargs, additional_columns=["cross_fold", "n_test_samples"])
 
     def evaluate(
         self, dataset, pipelines, param_grid, process_pipeline, postprocess_pipeline=None, random_state=None, save_model=False
     ):
-        # Get the data
+
+        # get the data
         X, y, metadata = self.paradigm.get_data(
             dataset=dataset,
             return_epochs=self.return_epochs,
@@ -50,33 +50,39 @@ class AllRunsEvaluationSubjectSpecific(BaseEvaluation):
             cache_config=self.cache_config,
             postprocess_pipeline=postprocess_pipeline,
         )
+        
+        if(pipelines.get("CollapsedShallowNet") is None and pipelines.get("ShallowFBCSPNet") is None):
+        # Add subjects as the final value of samples
+            data = X.get_data()
+            
+            for i in range(data.shape[0]):
+                data[i, :, -1] = metadata['subject'][i]
 
-        # Add subject IDs as additional input (optional)
-        # if isinstance(X, mne.BaseEpochs):
-        #     data = X.get_data()
-        #     for i in range(data.shape[0]):
-        #         data[i, :, -1] = metadata["subject"][i]
-        #     X._data = data
+            # Assign the modified data back to the EpochsArray
+            X._data = data
 
-        # Encode labels
+        # encode labels
         le = LabelEncoder()
         y = y if self.mne_labels else le.fit_transform(y)
 
-        # Extract metadata
+        # extract metadata
         subjects = metadata.subject.values
         sessions = metadata.session.values
+
         scorer = get_scorer(self.paradigm.scoring)
 
         n_splits = 1 if self.n_splits is None else self.n_splits
-
+ 
         for cv_ind in tqdm(range(n_splits), desc=f"{dataset.code}-AllRuns"):
-            train_indices, test_indices = [], []
+            
+            train_indices = []
+            test_indices = []
+            
 
-            # Create subject-specific train/test splits
+            # Loop through subjects, make one split each, stratified to balance labels
             for subject in np.unique(subjects):
                 subject_indices = np.where(subjects == subject)[0]
-                subject_labels = y[subject_indices]  # Get labels for stratification
-
+                subject_labels = y[subject_indices]
                 sss = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=random_state)
                 for train_idx, test_idx in sss.split(subject_labels, subject_labels):
                     # Map back to global indices
@@ -86,19 +92,21 @@ class AllRunsEvaluationSubjectSpecific(BaseEvaluation):
             train = np.array(train_indices)
             test = np.array(test_indices)
 
-            # Validate train and test indices
-            assert max(train) < len(X), "Train indices out of bounds!"
-            assert max(test) < len(X), "Test indices out of bounds!"
-
             for name, clf in pipelines.items():
+                
+                epochs = clf.steps[0][1].max_epochs
+                clf.steps[0][1].max_epochs = 1
+                batch_size = clf.steps[0][1].batch_size
+                lr = clf.steps[0][1].lr
+              
                 t_start = time()
-
-                # Handle subject-specific batching
-                if clf.steps[0][1].per_subject_batches:
-                    model = deepcopy(clf).fit(X[train], y[train], classifier__subjects=subjects[train])
-
-                else:
-                    model = deepcopy(clf).fit(X[train], y[train])
+                
+                model = deepcopy(clf)
+    
+                for e in range(epochs):
+                    for subject in np.unique(subjects[train]):
+                        ix = subjects[train] == subject
+                        model.fit(X[train[ix]], y[train[ix]])    
                     
                 duration = time() - t_start
 
@@ -108,19 +116,20 @@ class AllRunsEvaluationSubjectSpecific(BaseEvaluation):
                         code=dataset.code,
                         subject="mixed",
                         session="",
-                        name=name + "_" + self.suffix,
+                        name=name+"_"+self.suffix,
                         grid=False,
                         eval_type="AllRuns",
                     )
                     save_model_cv(
                         model=model, save_path=model_save_path, cv_index=str(cv_ind)
                     )
-
-                # Evaluate per session and subject
+                    
+                          
+                # eval on each session and subject
                 for subject in np.unique(subjects[test]):
                     for session in np.unique(sessions[test]):
                         ix = (subjects[test] == subject) & (sessions[test] == session)
-                        if np.any(ix):  # Ensure there are samples
+                        if np.any(ix):  # Check if there are any samples for this subject-session
                             score = _score(
                                 estimator=model,
                                 X_test=X[test[ix]],
@@ -129,51 +138,53 @@ class AllRunsEvaluationSubjectSpecific(BaseEvaluation):
                                 score_params={},
                             )
 
-                            nchan = X.info["nchan"] if isinstance(X, mne.BaseEpochs) else X.shape[1]
-                            res = {
-                                "time": duration,
-                                "dataset": dataset,
-                                "subject": subject,
-                                "session": session,
-                                "score": score,
-                                "n_samples": len(train),
-                                "n_test_samples": len(test[ix]),
-                                "n_channels": nchan,
-                                "cross_fold": cv_ind,
-                                "pipeline": name,
-                            }
+                        nchan = X.info["nchan"] if isinstance(X, BaseEpochs) else X.shape[1]
+                        res = {
+                            "time": duration,
+                            "dataset": dataset,
+                            "subject": subject,
+                            "session": session,
+                            "score": score,
+                            "n_samples": len(train),
+                            "n_test_samples": len(test[ix]),
+                            "n_channels": nchan,
+                            "cross_fold": cv_ind,
+                            "pipeline": name,
+                        }
 
-                            yield res
+                        yield res
+                # eval on all sessions and subject 
+                # ix = np.ones(len(test), dtype=bool)
+                # score = _score(
+                #     estimator=model,
+                #     X_test=X[test[ix]],
+                #     y_test=y[test[ix]],
+                #     scorer=scorer,
+                #     score_params={},
+                # )
 
-                # Evaluate on all test samples
-                ix = np.ones(len(test), dtype=bool)
-                score = _score(
-                    estimator=model,
-                    X_test=X[test[ix]],
-                    y_test=y[test[ix]],
-                    scorer=scorer,
-                    score_params={},
-                )
+                # nchan = X.info["nchan"] if isinstance(X, BaseEpochs) else X.shape[1]
+                # res = {
+                #     "time": duration,
+                #     "dataset": dataset,
+                #     "subject": "mixed",
+                #     "session": "mixed",
+                #     "score": score,
+                #     "n_samples": len(train),
+                #     "n_test_samples": len(test),
+                #     "n_channels": nchan,
+                #     "cross_fold": cv_ind,
+                #     "pipeline": name,
+                
+                # }
 
-                nchan = X.info["nchan"] if isinstance(X, mne.BaseEpochs) else X.shape[1]
-                res = {
-                    "time": duration,
-                    "dataset": dataset,
-                    "subject": "mixed",
-                    "session": "mixed",
-                    "score": score,
-                    "n_samples": len(train),
-                    "n_test_samples": len(test),
-                    "n_channels": nchan,
-                    "cross_fold": cv_ind,
-                    "pipeline": name,
-                }
-
-                yield res
+                # yield res
 
     def is_valid(self, dataset):
         return len(dataset.subject_list) > 1
-
+    
+    
+    
 
 class AllRunsEvaluationModified(BaseEvaluation):
 
@@ -193,14 +204,15 @@ class AllRunsEvaluationModified(BaseEvaluation):
             postprocess_pipeline=postprocess_pipeline,
         )
         
+        if(pipelines.get("CollapsedShallowNet") is None and pipelines.get("ShallowFBCSPNet") is None):
         # Add subjects as the final value of samples
-        data = X.get_data()
-        
-        for i in range(data.shape[0]):
-            data[i, :, -1] = metadata['subject'][i]
+            data = X.get_data()
+            
+            for i in range(data.shape[0]):
+                data[i, :, -1] = metadata['subject'][i]
 
-        # Assign the modified data back to the EpochsArray
-        X._data = data
+            # Assign the modified data back to the EpochsArray
+            X._data = data
 
         # encode labels
         le = LabelEncoder()

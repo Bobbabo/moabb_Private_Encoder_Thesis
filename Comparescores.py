@@ -15,7 +15,7 @@ from moabb.evaluations import CrossSessionEvaluation
 from moabb.paradigms import MotorImagery
 from moabb.utils import setup_seed
 
-from moabb.evaluations import AllRunsEvaluationModified
+from moabb.evaluations import AllRunsEvaluationModified, AllRunsEvaluationSubjectParam
 from shallow import CollapsedShallowNet, SubjectOneHotNet, SubjectOneHotConvNet, SubjectDicionaryConvNet, SubjectOneHotConvNet2, SubjectAdvIndexFCNet,ShallowFBCSPNet
 from shallowDict import ShallowPrivateTemporalDictNetSlow, ShallowPrivateSpatialDictNetSlow, ShallowPrivateCollapsedDictNetSlow, SubjectDicionaryFCNet
 
@@ -29,7 +29,7 @@ cuda = torch.cuda.is_available()
 device = "cuda" if cuda else "cpu"
 print("GPU is", "AVAILABLE" if cuda else "NOT AVAILABLE")
 
-seed = 3
+seed = 42
 setup_seed(seed)
 
 # Ensure that all operations are deterministic on GPU (if used) for reproducibility
@@ -72,10 +72,11 @@ def make_classifier(module):
         optimizer__lr=LEARNING_RATE,
         batch_size=BATCH_SIZE,
         max_epochs=EPOCH,
+        warm_start=True, #To keep training the model further for each fit instead of re-initializing
         train_split=ValidSplit(0.2, random_state=seed),
         device=device,
         callbacks=[
-            EarlyStopping(monitor="valid_loss", patience=PATIENCE),
+            #EarlyStopping(monitor="valid_loss", patience=PATIENCE),
             EpochScoring(
                 scoring="accuracy", on_train=True, name="train_acc", lower_is_better=False
             ),
@@ -113,12 +114,16 @@ clf11 = make_classifier(ShallowPrivateCollapsedDictNetSlow)
 # Create a pipeline with the classifier
 
 #pipes = {"ShallowPrivateCollapsedDictNetSlow": make_pipeline(clf11)}
+#pipes = {"ShallowPrivateTemporalDictNetSlow": make_pipeline(clf8)}
 #pipes = {"CollapsedShallowNet": make_pipeline(clf3), "SubjectOneHotConvNet": make_pipeline(clf4), "SubjectOneHotConvNet2": make_pipeline(clf5), "SubjectDicionaryConvNet": make_pipeline(clf6),}
-pipes = {"CollapsedShallowNet": make_pipeline(clf3), "ShallowPrivateCollapsedDictNetSlow": make_pipeline(clf11), "ShallowFBCSPNet": make_pipeline(clf9),"ShallowPrivateTemporalDictNetSlow": make_pipeline(clf8),"ShallowPrivateSpatialDictNetSlow": make_pipeline(clf10)}
+#pipes = {"CollapsedShallowNet": make_pipeline(clf3), "ShallowPrivateCollapsedDictNetSlow": make_pipeline(clf11), "ShallowFBCSPNet": make_pipeline(clf9),"ShallowPrivateTemporalDictNetSlow": make_pipeline(clf8),"ShallowPrivateSpatialDictNetSlow": make_pipeline(clf10)}
 #pipes = {"SubjectOneHotConvNet": make_pipeline(clf4), "CollapsedShallowNet": make_pipeline(clf3), "SubjectDicionaryFCNet": make_pipeline(clf2), "SubjectOneHotNet": make_pipeline(clf),}
-#pipes = {"CollapsedShallowNet": make_pipeline(clf3), "SubjectDicionaryConvNet": make_pipeline(clf6),}
+#pipes = {"CollapsedShallowNet": make_pipeline(clf3), "ShallowFBCSPNet": make_pipeline(clf9),"ShallowPrivateCollapsedDictNetSlow": make_pipeline(clf11) }
 #one with them all
 #pipes = {"SubjectOneHotNet": make_pipeline(clf), "SubjectDicionaryFCNet": make_pipeline(clf2), "CollapsedShallowNet": make_pipeline(clf3), "SubjectOneHotConvNet": make_pipeline(clf4), "SubjectOneHotConvNet2": make_pipeline(clf5), "SubjectDicionaryConvNet": make_pipeline(clf6), "SubjectAdvIndexFCNet": make_pipeline(clf7),}
+# all the ones with dict
+pipes = { "ShallowPrivateSpatialDictNetSlow": make_pipeline(clf10), "SubjectDicionaryFCNet": make_pipeline(clf2), "ShallowPrivateTemporalDictNetSlow": make_pipeline(clf8), "ShallowPrivateCollapsedDictNetSlow": make_pipeline(clf11), "ShallowFBCSPNet": make_pipeline(clf9), "CollapsedShallowNet": make_pipeline(clf3)}
+
 results_list = []
 # Ensure the output directory exists
 output_dir = f"./results_{seed}_{dataset.code}"
@@ -128,7 +133,7 @@ os.makedirs(output_dir, exist_ok=True)
 for pipe_name, pipe in pipes.items():
     unique_suffix = f"{pipe_name}_braindecode_example"
     
-    evaluation = AllRunsEvaluationModified(
+    evaluation = AllRunsEvaluationSubjectParam(
         paradigm=paradigm,
         datasets=[dataset],
         suffix=unique_suffix,

@@ -27,7 +27,7 @@ class ShallowPrivateCollapsedDictNetSlow(nn.Module):
         })   
 
         self.pool = nn.AvgPool2d((1, pool_size))
-        self.batch_norm = nn.BatchNorm2d(num_kernels)
+        self.instance_norm = nn.InstanceNorm2d(num_kernels) # Reflect on the use of InstanceNorm2d
         self.dropout = nn.Dropout(dropout)
         self.fc = nn.LazyLinear(n_outputs)
 
@@ -36,16 +36,21 @@ class ShallowPrivateCollapsedDictNetSlow(nn.Module):
         subject_ids = x[:, 0, -1] / 1000000  # Assuming subject IDs are in the last time point of channel 0
         x = x[:, :, :-1]  # Remove the last time point (which contains the subject ID)
         
+        # make a list of unique subject IDs
+        unique_subject_ids = torch.unique(subject_ids)
+        
+        if(unique_subject_ids.size(0) != 1):
+            print("Error: More than one subject ID detected in the batch")
+            return None
+        
+        subject_id = subject_ids[0].long().item()
+        
         x = torch.unsqueeze(x, dim=2)
-        outputs = []
-        for i in range(x.size(0)):
-            subject_id = subject_ids[i].long().item()
-            x_i = x[i:i+1]
-            x_i = self.spatio_temporal_layers[f'subject_{subject_id}'](x_i)
-            outputs.append(x_i)
-        x = torch.cat(outputs, dim=0)
+        
+        x = self.spatio_temporal_layers[f'subject_{subject_id}'](x)
+        
         x = F.elu(x)
-        x = self.batch_norm(x)
+        x = self.instance_norm(x)
         x = self.pool(x)
         x = x.view(x.size(0), -1)
         x = self.dropout(x)
@@ -75,16 +80,18 @@ class ShallowPrivateSpatialDictNetSlow(nn.Module):
         subject_ids = x[:, 0, -1] / 1000000  # Assuming subject IDs are in the last time point of channel 0
         x = x[:, :, :-1]  # Remove the last time point (which contains the subject ID)
         
+        unique_subject_ids = torch.unique(subject_ids)
+        
+        if(unique_subject_ids.size(0) != 1):
+            print("Error: More than one subject ID detected in the batch")
+            return None
+        
         x = torch.unsqueeze(x, dim=1)
         x = self.temporal(x)
         
-        outputs = []
-        for i in range(x.size(0)):
-            subject_id = subject_ids[i].long().item()
-            x_i = x[i:i+1]
-            x_i = self.spatial_layers[f'subject_{subject_id}'](x_i)
-            outputs.append(x_i)
-        x = torch.cat(outputs, dim=0)
+        subject_id = subject_ids[0].long().item()
+        
+        x = self.spatial_layers[f'subject_{subject_id}'](x)
 
         x = F.elu(x)
         x = self.batch_norm(x)
@@ -98,6 +105,8 @@ class ShallowPrivateTemporalDictNetSlow(nn.Module):
     def __init__(self, n_chans, n_outputs, n_times=1001, dropout=0.5, num_kernels=40, kernel_size=25, pool_size=100, num_subjects=9):
         super(ShallowPrivateTemporalDictNetSlow, self).__init__()
         self.num_subjects = num_subjects
+        
+        # Given groups=1, weight of size [40, 1, 1, 25], expected input[1, 128, 22, 1000] to have 1 channels, but got 128 channels instead
         
         self.temporal_layers = nn.ModuleDict({
             f'subject_{i+1}': nn.Conv2d(1, num_kernels, (1, kernel_size))
@@ -114,15 +123,15 @@ class ShallowPrivateTemporalDictNetSlow(nn.Module):
         
         subject_ids = x[:, 0, -1] / 1000000  # Assuming subject IDs are in the last time point of channel 0
         x = x[:, :, :-1]  # Remove the last time point (which contains the subject ID)
+        subject_id = subject_ids[0].long().item()
         
+        unique_subject_ids = torch.unique(subject_ids)
+        
+        # if(unique_subject_ids.size(0) != 1):
+        #     print("Error: More than one subject ID detected in the batch")
+        #     return None
         x = torch.unsqueeze(x, dim=1)
-        outputs = []
-        for i in range(x.size(0)):
-            subject_id = subject_ids[i].long().item()
-            x_i = x[i:i+1]
-            x_i = self.temporal_layers[f'subject_{subject_id}'](x_i)
-            outputs.append(x_i)
-        x = torch.cat(outputs, dim=0)
+        x = self.temporal_layers[f'subject_{subject_id}'](x)
         x = self.spatial(x)
         x = F.elu(x)
         x = self.batch_norm(x)
@@ -156,6 +165,15 @@ class SubjectDicionaryFCNet(nn.Module):
         subject_ids = x[:, 0, -1]/1000000   # Assuming subject IDs are in the last time point of channel 0
         x = x[:, :, :-1]  # Remove the last time point (which contains the subject ID)
 
+
+        unique_subject_ids = torch.unique(subject_ids)
+        subject_id = subject_ids[0].long().item()
+        
+        if(unique_subject_ids.size(0) != 1):
+            print("Error: More than one subject ID detected in the batch")
+            return None
+        
+        
         # Continue with the rest of the network
         x = torch.unsqueeze(x, dim=2)  # Add dimension for Conv2d
         x = self.spatio_temporal(x)
@@ -164,13 +182,7 @@ class SubjectDicionaryFCNet(nn.Module):
         x = self.pool(x)
         x = x.view(x.size(0), -1)  # Flatten
         x = self.dropout(x)
+        
+        x = self.fc_layers[f'subject_{subject_id}'](x)
 
-        out = torch.zeros(x.size(0), self.fc_layers['subject_1'].out_features, device=x.device)
-
-        # Use the subject IDs to select the appropriate FC layer
-        for i in range(x.size(0)):  # Loop over batch size
-            subject_id = subject_ids[i].item()  # Get the subject ID for the i-th sample
-            fc_layer = self.fc_layers[f'subject_{int(subject_id)}']  # Select the appropriate FC layer
-            out[i] = fc_layer(x[i])  # Apply FC layer to the i-th sample
-
-        return out
+        return x

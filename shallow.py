@@ -285,50 +285,6 @@ class SubjectAdvIndexFCNet(nn.Module):
         out = fc_output[batch_indices, subject_ids, :]  # Shape: (batch_size, n_outputs)
         
         return out
-
-
-
-class SubjectDicionaryFCNet(nn.Module):
-    def __init__(self, n_chans, n_outputs, n_times=1001, dropout=0.5, num_kernels=40, 
-                 kernel_size=25, pool_size=100, num_subjects=9):
-        super(SubjectDicionaryFCNet, self).__init__()
-        self.num_subjects = num_subjects
-        self.spatio_temporal = nn.Conv2d(
-            n_chans, num_kernels, (1, kernel_size))
-        self.pool = nn.AvgPool2d((1, pool_size))
-        self.batch_norm = nn.BatchNorm2d(num_kernels)
-        self.dropout = nn.Dropout(dropout)
-        
-        # Create a separate fully connected layer for each subject
-        self.fc_layers = nn.ModuleDict({
-            f'subject_{i+1}': nn.Linear(num_kernels * ((n_times - kernel_size + 1) // pool_size), n_outputs)
-            for i in range(num_subjects)           
-        })
-
-
-    def forward(self, x):
-        # Extract subject IDs from the last time point of the first channel (or any specific channel)
-        subject_ids = x[:, 0, -1]/1000000   # Assuming subject IDs are in the last time point of channel 0
-        x = x[:, :, :-1]  # Remove the last time point (which contains the subject ID)
-
-        # Continue with the rest of the network
-        x = torch.unsqueeze(x, dim=2)  # Add dimension for Conv2d
-        x = self.spatio_temporal(x)
-        x = F.elu(x)
-        x = self.batch_norm(x)
-        x = self.pool(x)
-        x = x.view(x.size(0), -1)  # Flatten
-        x = self.dropout(x)
-
-        out = torch.zeros(x.size(0), self.fc_layers['subject_1'].out_features, device=x.device)
-
-        # Use the subject IDs to select the appropriate FC layer
-        for i in range(x.size(0)):  # Loop over batch size
-            subject_id = subject_ids[i].item()  # Get the subject ID for the i-th sample
-            fc_layer = self.fc_layers[f'subject_{int(subject_id)}']  # Select the appropriate FC layer
-            out[i] = fc_layer(x[i])  # Apply FC layer to the i-th sample
-
-        return out
         
 
 
