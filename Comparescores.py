@@ -29,7 +29,7 @@ cuda = torch.cuda.is_available()
 device = "cuda" if cuda else "cpu"
 print("GPU is", "AVAILABLE" if cuda else "NOT AVAILABLE")
 
-seed = 42
+seed = 142
 setup_seed(seed)
 
 # Ensure that all operations are deterministic on GPU (if used) for reproducibility

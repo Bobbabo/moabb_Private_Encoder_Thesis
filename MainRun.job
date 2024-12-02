@@ -1,0 +1,13 @@
+#!/bin/bash
+ 
+#SBATCH --job-name=run_eeg_private_layers
+#SBATCH --output=job.%j.out     
+#SBATCH --cpus-per-task=2
+#SBATCH --time=2-00:00:00         
+#SBATCH --partition=acltr
+#SBATCH --gres=gpu:v100:1
+#SBATCH --mem-per-gpu=32G
+ 
+module load Anaconda3
+source activate my_env
+python Comparescores.py
