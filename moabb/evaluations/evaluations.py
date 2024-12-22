@@ -116,7 +116,7 @@ class SubjectParamEvaluation(BaseEvaluation):
                         code=dataset.code,
                         subject="mixed",
                         session="",
-                        name=name+"_"+self.suffix,
+                        name=name+"_"+"SubjectParam",
                         grid=False,
                         eval_type="AllRuns",
                     )
@@ -230,7 +230,7 @@ class AllRunsEvaluationModified(BaseEvaluation):
                         code=dataset.code,
                         subject="mixed",
                         session="",
-                        name=name+"_"+self.suffix,
+                        name=name+"_"+"modified",
                         grid=False,
                         eval_type="AllRuns",
                     )
