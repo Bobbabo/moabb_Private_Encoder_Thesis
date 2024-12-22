@@ -34,7 +34,7 @@ from sklearn.model_selection import BaseCrossValidator
 import torch.nn as nn
 import torch
 
-class AllRunsEvaluationSubjectParam(BaseEvaluation):
+class SubjectParamEvaluation(BaseEvaluation):
     def __init__(self,**kwargs):
         super().__init__(**kwargs, additional_columns=["cross_fold", "n_test_samples"])
 
@@ -73,7 +73,7 @@ class AllRunsEvaluationSubjectParam(BaseEvaluation):
 
         n_splits = 1 if self.n_splits is None else self.n_splits
  
-        for cv_ind in tqdm(range(n_splits), desc=f"{dataset.code}-AllRuns"):
+        for cv_ind in tqdm(range(n_splits), desc=f"{dataset.code}-SubjectParam"):
             
             train_indices = []
             test_indices = []
@@ -106,7 +106,7 @@ class AllRunsEvaluationSubjectParam(BaseEvaluation):
                 for e in range(epochs):
                     for subject in np.unique(subjects[train]):
                         ix = subjects[train] == subject
-                        model.fit(X[train[ix]], y[train[ix]])    
+                        model.fit(X[train[ix]], y[train[ix]])
                     
                 duration = time() - t_start
 
@@ -152,33 +152,7 @@ class AllRunsEvaluationSubjectParam(BaseEvaluation):
                             "pipeline": name,
                         }
 
-                        yield res
-                # eval on all sessions and subject 
-                # ix = np.ones(len(test), dtype=bool)
-                # score = _score(
-                #     estimator=model,
-                #     X_test=X[test[ix]],
-                #     y_test=y[test[ix]],
-                #     scorer=scorer,
-                #     score_params={},
-                # )
-
-                # nchan = X.info["nchan"] if isinstance(X, BaseEpochs) else X.shape[1]
-                # res = {
-                #     "time": duration,
-                #     "dataset": dataset,
-                #     "subject": "mixed",
-                #     "session": "mixed",
-                #     "score": score,
-                #     "n_samples": len(train),
-                #     "n_test_samples": len(test),
-                #     "n_channels": nchan,
-                #     "cross_fold": cv_ind,
-                #     "pipeline": name,
-                
-                # }
-
-                # yield res
+                        yield res          
 
     def is_valid(self, dataset):
         return len(dataset.subject_list) > 1
